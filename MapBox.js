@@ -1,7 +1,7 @@
 // Global variables
 var ss = SpreadsheetApp.getActiveSpreadsheet(),
     sheet = ss.getActiveSheet(),
-    activeRange = ss.getActiveRange(),
+    activeRange = ss.getDataRange(),
     settings = {};
     
 var geocoders = {
@@ -68,21 +68,81 @@ function onOpen() {
       name: 'Geocode Addresses',
       functionName: 'gcDialog'
   }, {
-      name: 'Export GeoJSON',
-      functionName: 'gjDialog'
+      name: 'Export GeoJSON Line',
+      functionName: 'gjDialogLine'
+  }, {
+      name: 'Export GeoJSON Point',
+      functionName: 'gjDialogPoint'
   }, {
       name: 'Help',
       functionName: 'helpSite'
   }]);
 }
 
-// UI to set up GeoJSON export
-function gjDialog() {
+// UI to set up GeoJSON Line export
+function gjDialogLine() {
+  Logger.log('Dialog Line');
+  //set type of geoJson
+  settings.type = 'line';
+  
   var headersRaw = getHeaders(sheet, activeRange, 1);
 
   // Create a new UI
   var app = UiApp.createApplication()
-    .setTitle('Export GeoJSON')
+    .setTitle('Export GeoJSON LineString')
+    .setStyleAttribute('width', '460')
+    .setStyleAttribute('padding', '20');
+
+  // Create a grid to hold the form
+  var grid = app.createGrid(4, 2);
+
+  // Add form elements to the grid
+  grid.setWidget(0, 0, app.createLabel('Unique ID:'));
+  grid.setWidget(0, 1, app.createListBox().setName('idBox').setId('idBox'));
+  grid.setWidget(1, 0, app.createLabel('GeoData:'));
+  grid.setWidget(1, 1, app.createListBox().setName('geoBox').setId('geoBox'));
+
+  // Set the list boxes to the header values
+  for (var i = 0; i < headersRaw.length; i++) {
+    app.getElementById('idBox').addItem(headersRaw[i]);
+    app.getElementById('geoBox').addItem(headersRaw[i]);
+  }
+
+  // Create a vertical panel...
+  var panel = app.createVerticalPanel().setId('settingsPanel');
+
+  panel.add(app.createLabel(
+    'To format your spreadsheet as GeoJSON LineString file, select the following columns:'
+    + ' GeoData must be an array. Ex: [ [100.0, 0.0], [101.0, 1.0] ] (longitude, latitude)'
+  ).setStyleAttribute('margin-bottom', '20'));
+
+  // ...and add the grid to the panel
+  panel.add(grid);
+
+  // Create a button and click handler; pass in the grid object as a
+  // callback element and the handler as a click handler
+  // Identify the function b as the server click handler
+  var button = app.createButton('Export')
+      .setStyleAttribute('margin-top', '10')
+      .setId('export');
+  var handler = app.createServerClickHandler('exportGJ');
+  handler.addCallbackElement(grid);
+  button.addClickHandler(handler);
+
+  // Add the button to the panel and the panel to the application,
+  // then display the application app in the spreadsheet doc
+  grid.setWidget(3, 1, button);
+  app.add(panel);
+  ss.show(app);
+}
+
+// UI to set up GeoJSON Point export
+function gjDialogPoint() {
+  var headersRaw = getHeaders(sheet, activeRange, 1);
+
+  // Create a new UI
+  var app = UiApp.createApplication()
+    .setTitle('Export GeoJSON Point')
     .setStyleAttribute('width', '460')
     .setStyleAttribute('padding', '20');
 
@@ -134,10 +194,14 @@ function gjDialog() {
 // Handle submits by updating the settings object, calling the
 // export function, updates the UI
 function exportGJ(e) {
+  
+  Logger.log('export: --> :' + e.parameter.geoBox);
+  
   settings = {
     id: e.parameter.idBox,
     lon: e.parameter.lonBox,
-    lat: e.parameter.latBox
+    lat: e.parameter.latBox,
+    geo: e.parameter.geoBox
   };
   
   // Update ui to show status
@@ -464,7 +528,6 @@ function getRowsData(sheet, range, columnHeadersRowIndex) {
 //   - data: JavaScript 2d array
 //   - keys: Array of Strings that define the property names for the objects to create
 function getObjects(data, keys) {
-  var objects = [];
   var headers = getHeaders(sheet, activeRange, 1);
 
   // Zip an array of keys and an array of data into a single-level
@@ -477,10 +540,24 @@ function getObjects(data, keys) {
     return obj;
   };
 
+  if (settings.geo) {
+    return this.geoJsonLine(data, headers, zip);
+  } else {
+    return this.geoJsonPoint(data, headers, zip);
+  }
+  
+}
+
+function geoJsonPoint(data, headers, zip) {
+  Logger.log('geoJsonPoint: ' + settings.lat);
+  var objects = [];
+  
   // For each row
   for (var i = 0; i < data.length; i++) {
     var obj = zip(headers, data[i]);
 
+    Logger.log('Obj : ' + settings.lat);
+    
     var lat = parseFloat(obj[settings.lat]),
       lon = parseFloat(obj[settings.lon]);
 
@@ -504,9 +581,52 @@ function getObjects(data, keys) {
       objects.push(feature);
     }
   }
+  
   return objects;
 }
 
+function geoJsonLine(data, headers, zip) {
+  Logger.log('geoJsonLine');
+  var objects = [], prop = {};
+  
+  // For each row
+  for (var i = 0; i < data.length; i++) {
+    var obj = zip(headers, data[i]);
+
+    Logger.log('Obj : ' + settings.geo);
+    
+    var coordinates = (obj[settings.geo]);
+    
+    // If we have an id, lon, and lat
+    if (obj[settings.id] && coordinates) {
+      
+      //Remove from properties coordiantes and id
+      for (var key in obj) {
+        if (key != settings.geo && key != settings.id) {
+          prop[key] = obj[key];
+        }
+      }
+      
+      // Define a new GeoJSON feature object
+      var feature = {
+        type: 'Feature',
+        // Get ID from UI
+        id: obj[settings.id],
+        geometry: {
+          type: 'LineString',
+          // Get coordinates from UIr
+          coordinates: JSON.parse(coordinates)
+        },
+        // Place holder for properties object
+        properties: prop
+      };
+      
+      objects.push(feature);
+    }
+  }
+  
+  return objects;
+}
 // Normalizes a string, by removing all non alphanumeric characters and using mixed case
 // to separate words.
 function cleanCamel(str) {
